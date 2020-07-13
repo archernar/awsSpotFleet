@@ -1,0 +1,282 @@
+#!/bin/bash
+Tmp="/tmp/$$"
+trap 'rm -f "$Tmp" >/dev/null 2>&1' 0
+trap "exit 2" 1 2 3 13 15
+rm -f "$Tmp" >/dev/null 2>&1
+
+# ******************************************************************
+# .spot file in you home directory
+# Line 1: Your maximum bid price for spot instances
+# Line 2: The numberof EC2s to create
+# Line 3: Your selected spot instance type
+# Line 4: The Availability Zone to create the spot EC2s
+# Line 5: The AMI to use to create the sport EC2s
+# Line 6: Disk size if using EBS volumes
+# Line 7: The account name as specified in the ~/.aws/config file 
+# Line 8: The VPC ID of the VPC where the EC2s are created
+# Line 9: The CIDR IP address (IP/MASK) of you connecting maching
+#
+#
+
+cat <<-ENDOFTEXT > /tmp/trim.awk
+function ltrim(s) { sub(/^ */, "", s); return s }
+function rtrim(s) { sub(/ *$/, "", s); return s }
+function trim(s) { return rtrim(ltrim(s)); }
+ENDOFTEXT
+
+FTAG="FLEETAUTO"
+SGNAME="$FTAG"`cat /dev/urandom | tr -cd 'a-f0-9' | head -c 12`
+KEYNAME="$FTAG"`cat /dev/urandom | tr -cd 'a-f0-9' | head -c 12`
+PEMS=~/NETPEMS
+SPOTPR=`cat $HOME/.spot   | gawk '@include "/tmp/trim.awk";{if (NR==1) print trim($0)}'`
+SPOTCT=`cat $HOME/.spot   | gawk '@include "/tmp/trim.awk";{if (NR==2) print trim($0)}'`
+SPOTIT=`cat $HOME/.spot   | gawk '@include "/tmp/trim.awk";{if (NR==3) print trim($0)}'`
+SPOTAZ=`cat $HOME/.spot   | gawk '@include "/tmp/trim.awk";{if (NR==4) print trim($0)}'`
+SPOTAMI=`cat $HOME/.spot  | gawk '@include "/tmp/trim.awk";{if (NR==5) print trim($0)}'`
+ACCOUNT=`cat $HOME/.spot  | gawk '@include "/tmp/trim.awk";{if (NR==7) print trim($0)}'`
+VPC=`cat $HOME/.spot      | gawk '@include "/tmp/trim.awk";{if (NR==8) print trim($0)}'`
+CIDR=`cat $HOME/.spot     | gawk '@include "/tmp/trim.awk";{if (NR==9) print trim($0)}'`
+
+cat <<-ENDOFMESSAGE > disk.cfg
+label: dos
+label-id: 0xf56fde92
+device: /dev/nvme1n1
+unit: sectors
+
+/dev/nvme1n1p1 : start=        2048, size=   146482327, type=83
+ENDOFMESSAGE
+#   ==============================================================================
+#   - Build Spot Instance Template
+#   ------------------------------------------
+cat <<-ENDOFMESSAGE > specification.json
+                        {
+                                "ImageId": "$SPOTAMI", 
+                                "BlockDeviceMappings": [
+                                    {
+                                        "DeviceName": "/dev/xvdb", 
+                                        "Ebs": {
+                                            "Encrypted": false, 
+                                            "DeleteOnTermination": true, 
+                                            "VolumeType": "gp2", 
+                                            "VolumeSize": 40 
+                                        }
+                                    }
+                                ], 
+                                "KeyName": "$KEYNAME", 
+                                "SecurityGroupIds": [ "ACTUAL-SGID" ], 
+                                "InstanceType": "$SPOTIT", 
+                                "Placement": {
+                                    "Tenancy": "default", 
+                                    "GroupName": "", 
+                                    "AvailabilityZone": "$SPOTAZ"
+                                }
+                        }
+ENDOFMESSAGE
+
+#   -i : Create  SG, Key, and Spot Instance(s)
+#   -d : DNS
+#   -s : Storage
+#   -k : Kill the instance fleet
+#   -c : Clean up all SGs and Keys after killng the instance fleet
+#                      cat /dev/urandom | tr -cd 'a-f0-9' | head -c 32> ping.ping
+#                      scp -o StrictHostKeyChecking=no -i $PEMS/$K.pem ping.ping ec2-user@$DNS:/home/ec2-user/ping.ping
+
+    while getopts "sit:ckdl" arg
+    do
+            case $arg in
+                s) 
+                     LIST=`cat ~/.fleetdns`
+                     for ITEM in $LIST; do
+                         DNS=`echo $ITEM | gawk -F, '{print $2}'`
+                         K=`echo $ITEM | gawk -F, '{print $3}'`
+                         CMD="sudo ls /home/ec2-user | egrep ^disk$"
+                         ssh ec2-user@$DNS -o StrictHostKeyChecking=no -i $PEMS/$K.pem $CMD > $Tmp
+                         DIR=`cat $Tmp`
+                            echo "nvme"
+                            scp -o StrictHostKeyChecking=no -i $PEMS/$K.pem disk.cfg ec2-user@$DNS:/home/ec2-user/disk.cfg
+                            CMD="sudo chmod u+rwx,g+rwx,o-rwx  /home/ec2-user/disk.cfg"
+                            ssh ec2-user@$DNS -o StrictHostKeyChecking=no -i $PEMS/$K.pem $CMD
+                            CMD="sudo sfdisk /dev/nvme1n1 < /home/ec2-user/disk.cfg"
+                            ssh ec2-user@$DNS -o StrictHostKeyChecking=no -i $PEMS/$K.pem $CMD
+                            DISK="/dev/nvme1n1p1"
+                            CMD="sudo mkfs -t ext4 $DISK"
+                            ssh ec2-user@$DNS -o StrictHostKeyChecking=no -i $PEMS/$K.pem $CMD
+                            CMD="sudo mkdir -p /home/ec2-user/disk"
+                            ssh ec2-user@$DNS -o StrictHostKeyChecking=no -i $PEMS/$K.pem $CMD
+                            CMD="sudo mount $DISK /home/ec2-user/disk"
+                            CMD="sudo mount -t ext4 -o defaults,noiversion,auto_da_alloc,noatime,errors=remount-ro,commit=20,inode_readahead_blks=32,delalloc,barrier=0 $DISK /home/ec2-user/disk"
+                            ssh ec2-user@$DNS -o StrictHostKeyChecking=no -i $PEMS/$K.pem $CMD
+                            CMD="sudo chown ec2-user:ec2-user  /home/ec2-user/disk"
+                            ssh ec2-user@$DNS -o StrictHostKeyChecking=no -i $PEMS/$K.pem $CMD
+                            CMD="sudo chmod u+rwx,g+rwx,o-rwx  /home/ec2-user/disk"
+                            ssh ec2-user@$DNS -o StrictHostKeyChecking=no -i $PEMS/$K.pem $CMD
+                        done
+                        exit 0
+                        ;;
+               t) 
+                        H=`cat $HOME/.instanceid$OPTARG  | gawk '{if (NR==1) print $0}'`
+                        ID=`cat $HOME/.instanceid$OPTARG | gawk '{if (NR==2) print $0}'`
+                        K=`cat $HOME/.instanceid$OPTARG  | gawk '{if (NR==3) print $0}'`
+                        U="ec2-user"
+                        H=$U"@"$H
+                        echo print "ssh -i $PEMS/$K.pem "$H
+                        ssh -i $PEMS/$K.pem $H
+                        exit 0
+                        ;;
+                l) 
+#                     echo "Requests"
+#                         aws --profile $ACCOUNT --output text ec2 describe-spot-instance-requests \
+#                         --query "SpotInstanceRequests[*].{ID:InstanceId, ST:Status.Code,SM:Status.Message}"
+#                     echo "";
+#                     echo "";
+                    echo "";echo "Instances"
+                    FLDS="InstanceId,State.Name,InstanceType,InstanceLifecycle"
+                    aws --profile $ACCOUNT ec2 describe-instances \
+                        --query 'Reservations[*].Instances[*].['$FLDS']' | grep "running" | egrep "spot$" | gawk '{print $1}' > $Tmp
+                    cat $Tmp
+                    echo "";echo "Security Groups"
+                    LIST=`aws --profile $ACCOUNT ec2 describe-security-groups | grep $FTAG | gawk '{print $3}'`
+                    for ITEM in $LIST; do
+                        echo $ITEM
+                    done
+                    echo "";echo "Keys"
+                    LIST=`aws --profile $ACCOUNT ec2 describe-key-pairs | gawk -v rx="$FTAG" '($3 ~ ("^" rx)) { print $3 }'`
+                    for ITEM in $LIST; do
+                        echo $ITEM
+                    done
+                    echo "";echo "DNS"
+                    LIST=`cat $Tmp`
+                    for ITEM in $LIST; do
+                        aws --output json --profile $ACCOUNT ec2 describe-instances \
+                            --instance-ids $ITEM | jq ".Reservations[0].Instances[0].PublicDnsName" | sed -e 's/["]//g' 
+                    done
+                    exit 0
+                    ;;
+                k) 
+                    rm -rf ~/.fleet  >/dev/null 2>&1
+                    aws --profile $ACCOUNT ec2 describe-spot-instance-requests \
+                        --query "SpotInstanceRequests[*].{ID:InstanceId, ST:Status.Code}" | gawk '/filled$/ {print $1}' > $Tmp
+                    cat $Tmp | while read line; do
+                        aws --profile $ACCOUNT ec2 terminate-instances --instance-ids $line 
+                    done
+                    exit 0
+                    ;;
+                d) 
+                    typeset -i CT
+                    let CT=1
+                    rm -rf ~/.fleet  >/dev/null 2>&1
+                    rm -rf ~/.fleetdns  >/dev/null 2>&1
+                    echo "0" > ~/.thefleet
+                    rm -rf ~/.instanceid*  >/dev/null 2>&1
+                    FLDS="InstanceId,State.Name,InstanceType,InstanceLifecycle"
+                    aws --profile $ACCOUNT ec2 describe-instances \
+                        --query 'Reservations[*].Instances[*].['$FLDS']' \
+                        | grep "running" | egrep "spot$" | gawk '{print $1}' >> ~/.fleet
+                    wc -l ~/.fleet | gawk '{print $1}' > ~/.thefleet
+
+                    cat ~/.fleet | while read line; do
+                        echo -n "Spot Fleet Size is: : "; cat ~/.thefleet;echo ""
+                        AUTOKEY=`cat $PEMS/.autokey | gawk '{print $1}'`
+                        aws --profile $ACCOUNT --output json ec2 describe-instances \
+                            --instance-ids $line | jq ".Reservations[0].Instances[0].PublicDnsName" > $Tmp
+                        # cat $Tmp | sed -e 's/["]//g' > ~/.instanceid$CT
+                        D=`cat $Tmp | sed -e 's/["]//g'`
+                        echo $line","$D","$AUTOKEY  >> ~/.fleetdns
+                        echo $D                     > ~/.instanceid$CT
+                        echo $line                 >> ~/.instanceid$CT
+                        echo $AUTOKEY              >> ~/.instanceid$CT
+
+                        echo $line
+                        cat $Tmp | sed -e 's/["]//g'
+                        echo $AUTOKEY
+                        echo ""
+
+                        let CT=$CT+1
+                    done
+                    exit 0
+                    ;;
+                c) 
+                    typeset -i CT
+                    let CT=1
+                    rm -f $PEMS/* >/dev/null 2>&1
+                    LIST=`aws --profile $ACCOUNT ec2 describe-key-pairs | gawk -v ex="$FTAG" '($3 ~ ("^" ex)) { print $3 }'`
+                    for ITEM in $LIST; do
+                        echo "Delete Key Pair "$ITEM
+                        aws --profile $ACCOUNT ec2 delete-key-pair --key-name $ITEM
+                        rm -f $PEMS/$ITEM.pem
+                    done
+
+                    LIST=`aws --profile $ACCOUNT ec2 describe-security-groups | grep $FTAG | gawk '{print $3}'`
+                    for ITEM in $LIST; do
+                        echo "Remove ingress rules from SG "$ITEM
+                        aws --profile $ACCOUNT ec2 revoke-security-group-ingress --group-id $ITEM \
+                                                                                 --protocol tcp \
+                                                                                 --port 22 --cidr $CIDR
+                        aws --profile $ACCOUNT ec2 revoke-security-group-ingress --group-id $ITEM \
+                                                                                 --protocol tcp \
+                                                                                 --port 22 --source-group $ITEM
+                    done
+
+                    for ITEM in $LIST; do
+                        echo "Delete SG "$ITEM
+                        aws --profile $ACCOUNT ec2 delete-security-group --group-id $ITEM
+                    done
+                    exit 0
+                    ;;
+                i) 
+                    #   ==============================================================================
+                    #   - Create Security Group
+                    #   ------------------------------------------
+                        aws --profile $ACCOUNT ec2 create-security-group            --group-name $SGNAME \
+                                                                                    --description "$SGNAME" \
+                                                                                    --vpc-id $VPC > $Tmp
+                        SG=`cat $Tmp`
+                        cp specification.json $Tmp
+                        cat $Tmp | sed "s/ACTUAL-SGID/$SG/g" > specification.json
+                        rm -f "$Tmp" >/dev/null 2>&1
+
+                        aws --profile $ACCOUNT ec2 authorize-security-group-ingress --group-id $SG \
+                                                                                    --protocol tcp \
+                                                                                    --port 22 --cidr $CIDR
+                        aws --profile $ACCOUNT ec2 authorize-security-group-ingress --group-id $SG \
+                                                                                    --protocol tcp \
+                                                                                    --port 22 --source-group $SG
+                        echo "Create SG "$SGNAME" "$SG
+                    #   ==============================================================================
+                    #   - Create Key
+                    #   ------------------------------------------
+                        aws --profile $ACCOUNT  ec2 create-key-pair --key-name $KEYNAME  > $Tmp
+                        gawk   '/BEGIN RSA/ {
+                                   print "-----BEGIN RSA PRIVATE KEY-----"
+                                   next
+                               }
+                               /END RSA/ {
+                                   print "-----END RSA PRIVATE KEY-----"
+                                   next
+                               }
+                               {
+                                   print $0
+                               }' $Tmp > $PEMS/$KEYNAME.pem
+
+                        rm -f  $Tmp >/dev/null 2>&1
+                        chmod 400   $PEMS/$KEYNAME.pem
+                        rm -f  $PEMS/.autokey  >/dev/null 2>&1
+                        echo $KEYNAME  > $PEMS/.autokey
+                        echo "Create Key "$KEYNAME
+
+
+                        #   ==============================================================================
+                        #   - Request Spot Instance
+                        #   ------------------------------------------
+                        aws --profile $ACCOUNT --output json ec2 request-spot-instances \
+                                               --spot-price "$SPOTPR" \
+                                               --instance-count $SPOTCT \
+                                               --type "one-time" \
+                                               --launch-specification file://specification.json >/dev/null 2>&1
+                        exit 0
+                        ;;
+            esac
+    done
+    shift $(($OPTIND - 1))
+
+
