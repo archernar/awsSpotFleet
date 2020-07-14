@@ -5,6 +5,10 @@ trap "exit 2" 1 2 3 13 15
 rm -f "$Tmp" >/dev/null 2>&1
 
 # ******************************************************************
+# What you are going to need
+# 1) An AWS account and a confured ~/.aws/config file with keys 
+# 2) The programs jq, gawk, and sed
+
 # How To Create a Spot Fleet
 # 1) setup ~/.spot
 # 2) ./fleet -i      ;  creates Keys and Security Groups
