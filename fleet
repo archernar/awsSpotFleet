@@ -5,14 +5,22 @@ trap "exit 2" 1 2 3 13 15
 rm -f "$Tmp" >/dev/null 2>&1
 
 # ******************************************************************
-# How To
+# How To Create a Spot Fleet
 # 1) setup ~/.spot
-# 2) ./fleet -i      ;  Makes the spot request
+# 2) ./fleet -i      ;  creates Keys and Security Groups
+#                    ;  Makes the spot request(s)
 # wait about 10 seconds
-# 3) ./fleet -d      ;  Setsup the DNS so the instance can be connected to
+# 3) ./fleet -d      ;  Sets up the DNS so the instance can be connected to
+#                    ;  A .instanceid# is created for each spot instance
 # wait about 10 seconds
-# 4) ./fleet -s      ;  Setsup the partitions and file systems on the instances
+# 4) ./fleet -s      ;  Sets up the partitions and file systems on the instances
 # 5) ./fleet -l      ;  List the fleet
+
+# How To Destroy a Spot Fleet
+# 1) ./fleet -k      ;  Terminates all Spot Instances in the Fleet 
+# wait about 30 seconds
+# 2) ./fleet -c      ;  Removes all Keys and Security Groups associate with the Fleet
+# 3) ./fleet -l      ;  List the fleet
 
 # .spot file in you home directory
 # Line 1: Your maximum bid price for spot instances
